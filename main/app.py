@@ -1,16 +1,29 @@
 # service_main_app/app.py
 
+import eventlet
+eventlet.monkey_patch()
+
 import os
 import io
 import pandas as pd
+import numpy as np
 import requests
+import uuid
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for
+from flask_socketio import SocketIO, emit, join_room
 
-# Inisialisasi aplikasi Flask
+# --- Inisialisasi Aplikasi ---
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'kunciii_rahasia_banget'
+# Buat folder untuk menyimpan file upload sementara
+os.makedirs('uploads', exist_ok=True) 
+app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['SERVER_NAME'] = 'localhost:5000'
 
-# Konfigurasi URL untuk setiap microservice
-# Dalam skenario nyata, ini bisa diambil dari environment variables
+# Inisialisasi SocketIO
+socketio = SocketIO(app)
+
+# --- Konfigurasi Layanan (Sama seperti sebelumnya) ---
 SERVICE_URLS = {
     "preprocessing": "http://localhost:5001/preprocess",
     "sentiment": "http://localhost:5002/analyze_sentiment",
@@ -19,38 +32,153 @@ SERVICE_URLS = {
     "summary": "http://localhost:5005/generate_summary"
 }
 
-# --- Helper Function untuk memanggil service lain ---
+# --- Fungsi Helper (Sama seperti sebelumnya) ---
 def call_service(service_name, data_payload):
+    # try:
+    url = SERVICE_URLS.get(service_name)
+    if not url:
+        return {"error": f"Service '{service_name}' tidak ditemukan."}
+    
+    # Logika custom untuk service summary
+    if service_name == 'summary':
+        response = requests.post(url, json={'data': data_payload['data']['df'], 'prompt': data_payload['data']['lda_prompt']}, timeout=180)
+    else:
+        response = requests.post(url, json=data_payload, timeout=180)
+    
+    response.raise_for_status()
+    return response.json()
+    # except requests.exceptions.RequestException as e:
+    #     # Mengembalikan error dalam format yang bisa di-handle
+    #     return {"error": f"Error di service '{service_name}': {str(e)}"}
+
+# --- FUNGSI PROSES LATAR BELAKANG (Sama seperti sebelumnya) ---
+def run_processing_pipeline(file_path, user_room):
     """
-    Fungsi untuk memanggil microservice lain dengan penanganan error.
+    Fungsi ini menjalankan seluruh pipeline dan mengirim update ke 'room' pengguna.
+    `user_room` adalah ID unik pengguna dari session.
     """
+    current_data = None
+    
     try:
-        url = SERVICE_URLS.get(service_name)
-        if not url:
-            return {"error": f"Service '{service_name}' tidak ditemukan."}
+        # Pastikan kita punya user_room untuk mengirim update
+        if not user_room:
+            raise Exception("Tidak dapat memulai proses, sesi pengguna tidak ditemukan.")
         
+        socketio.sleep(1)
 
-        if service_name == 'summary':
-            response = requests.post(url, json={'data': data_payload['data']['df'], 'prompt': data_payload['data']['lda_prompt']}, timeout=180) # Timeout 180 detik
-        else :
-            response = requests.post(url, json=data_payload, timeout=180) # Timeout 180 detik
+        # Baca file CSV yang sudah diunggah
+        df = pd.read_csv(file_path)
+        if 'full_text' not in df.columns:
+            raise ValueError("File CSV harus memiliki kolom bernama 'full_text'.")
+        
+        df = df.replace([np.inf, -np.inf], np.nan)  # ubah inf jadi NaN
+        df = df.fillna("") 
+        
+        current_data = {"data": df.to_dict(orient='records')}
 
-        response.raise_for_status()  # Akan raise error jika status code bukan 2xx
-        return response.json()
-    except requests.exceptions.ConnectionError:
-        return {"error": f"Gagal terhubung ke service '{service_name}' di {url}."}
-    except requests.exceptions.RequestException as e:
-        return {"error": f"Terjadi error saat memanggil service '{service_name}': {e}"}
+        # --- Alur Kerja Orkestrasi Sekuensial Eksplisit ---
 
+        # Langkah 1: Preprocessing
+        socketio.emit('step_start', {'step': 'preprocessing'})
+        preprocessed_result = call_service("preprocessing", current_data)
+        if "error" in preprocessed_result:
+            raise Exception(preprocessed_result["error"])
+        socketio.emit('step_end', {'step': 'preprocessing', 'message': "Langkah 'preprocessing' berhasil diselesaikan."}, to=user_room)
 
-# --- Routes / Endpoints ---
+        # Langkah 2: Sentiment Analysis
+        socketio.emit('step_start', {'step': 'sentiment'}, to=user_room)
+        sentiment_result = call_service("sentiment", preprocessed_result)
+        if "error" in sentiment_result:
+            raise Exception(sentiment_result["error"])
+        socketio.emit('step_end', {'step': 'sentiment', 'message': "Langkah 'sentiment' berhasil diselesaikan."}, to=user_room)
 
+        # Langkah 3: Policy Classification
+        socketio.emit('step_start', {'step': 'policy'}, to=user_room)
+        policy_result = call_service("policy", sentiment_result)
+        if "error" in policy_result:
+            raise Exception(policy_result["error"])
+        socketio.emit('step_end', {'step': 'policy', 'message': "Langkah 'policy' berhasil diselesaikan."}, to=user_room)
+
+        # Langkah 4: LDA Modeling
+        socketio.emit('step_start', {'step': 'lda'}, to=user_room)
+        lda_result = call_service("lda", policy_result)
+        if "error" in lda_result:
+            raise Exception(lda_result["error"])
+        current_data = lda_result
+        socketio.emit('step_end', {'step': 'lda', 'message': "Langkah 'lda' berhasil diselesaikan."}, to=user_room)
+
+        # Langkah 5: Summary
+        socketio.emit('step_start', {'step': 'summary'}, to=user_room)
+        summary_result = call_service("summary", lda_result)
+        if "error" in summary_result:
+            raise Exception(summary_result["error"])
+        socketio.emit('step_end', {'step': 'summary', 'message': "Langkah 'summary' berhasil diselesaikan."}, to=user_room)
+        
+        # --- Proses Selesai ---
+        # Simpan hasil akhir ke file CSV di folder static agar bisa di-download
+        final_df = pd.DataFrame(lda_result['data']['df'])
+        final_csv_path = os.path.join('static', 'result.csv')
+        final_df.to_csv(final_csv_path, index=False)
+
+        sentiment = final_df["sentiment"].value_counts().to_dict()
+        kebijakan = final_df["policy"].value_counts().to_dict()
+
+        df_hasil_head = final_df.groupby(['sentiment', 'topic']).head(5).reset_index(drop=True).drop(['clean_text', 'tokenize_text', 'filter_text', 'stem_text'], axis=1).to_json()
+
+        with app.app_context():
+            result_html = render_template(
+                'result.html', 
+                lda=lda_result['data']['html'], 
+                sentiment=sentiment, 
+                kebijakan=kebijakan
+            )
+        
+        # Kirim event 'process_complete' dengan hasil akhir
+        socketio.emit('process_complete', {
+            "message": "Semua proses berhasil diselesaikan.",
+            "html": result_html,
+            "summary": summary_result['data'],
+            "df_hasil_head": df_hasil_head,
+        }, to=user_room)
+
+    except Exception as e:
+        # Jika terjadi error di mana pun dalam pipeline
+        socketio.emit('process_error', {'error': str(e)}, to=user_room)
+        print(e)
+    finally:
+        # Hapus file sementara setelah selesai
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+# --- Rute HTTP (Sama seperti sebelumnya) ---
+
+@app.route('/process', methods=['POST'])
+def process_csv_file():
+    if 'user' not in session:
+        return jsonify({"error": "Sesi tidak valid. Silakan login kembali."}), 401
+
+    if 'file' not in request.files:
+        return jsonify({"error": "File CSV tidak ditemukan."}), 400
+    
+    file = request.files['file']
+    if file.filename == '' or not file.filename.endswith('.csv'):
+        return jsonify({"error": "Mohon pilih file CSV yang valid."}), 400
+
+    filename = str(uuid.uuid4()) + ".csv"
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    file.save(file_path)
+
+    user_room_id = session['user']
+    socketio.start_background_task(run_processing_pipeline, file_path, user_room_id)
+    
+    return jsonify({"message": "Proses dimulai. Tunggu pembaruan log."}), 202
+
+# --- Rute Lainnya (Sama seperti sebelumnya) ---
 @app.route('/')
 def home():
     if 'user' in session: return render_template('home.html', title="Home Page")
     else: return redirect(url_for('login'))
 
-# Rute-rute dan handler lainnya tidak perlu diubah
 @app.route('/login', methods=['POST','GET'])
 def login():
     if request.method == 'POST':
@@ -59,87 +187,33 @@ def login():
             session['user'] = username
             return {'message': 'success', 'data': {'nextRoute': '/'}}, 200
         else: return {'message': 'username dan password salah'}, 400
-
     return render_template('login.html', title="Login Page")
 
 @app.route('/logout')
 def logout():
     session.pop('user', None); return redirect(url_for('login'))
 
-@app.route('/process', methods=['POST'])
-def process_csv_file():
-    """
-    Endpoint untuk menerima file CSV dan mengorkestrasi alur kerja analisis
-    secara sekuensial dan eksplisit.
-    """
-    # 1. Validasi input file
-    if 'file' not in request.files:
-        return jsonify({"error": "File CSV tidak ditemukan. Mohon sertakan dengan key 'file'."}), 400
 
-    file = request.files['file']
+# --- Event Handler WebSocket (Sama seperti sebelumnya) ---
+@socketio.on('connect')
+def handle_connect():
+    # Hanya log koneksi, tidak lagi otomatis join room di sini
+    print(f"Klien terhubung dengan SID: {request.sid}")
 
-    if file.filename == '':
-        return jsonify({"error": "Nama file kosong."}), 400
-
-    if not file.filename.endswith('.csv'):
-        return jsonify({"error": "Format file tidak valid. Hanya menerima .csv"}), 400
-
-    try:
-        # 2. Baca dan konversi CSV menjadi format JSON yang bisa dikirim
-        csv_data = file.read().decode('utf-8')
-        df = pd.read_csv(io.StringIO(csv_data))
-        
-        if 'full_text' not in df.columns:
-             return jsonify({"error": "File CSV harus memiliki kolom bernama 'full_text'."}), 400
-
-        # Data awal dalam format yang siap dikirim
-        initial_data = {"data": df.to_dict(orient='records')}
-        
-        # --- Alur Kerja Orkestrasi Sekuensial Eksplisit ---
-
-        # Langkah 1: Panggil service Preprocessing
-        preprocessed_result = call_service("preprocessing", initial_data)
-        if "error" in preprocessed_result:
-            status_code = preprocessed_result.get("status_code", 500)
-            return jsonify({"error_in_service": "preprocessing", "details": preprocessed_result["error"]}), status_code
-
-        # Langkah 2: Panggil service Sentiment (input dari preprocessing)
-        sentiment_result = call_service("sentiment", preprocessed_result)
-        if "error" in sentiment_result:
-            status_code = sentiment_result.get("status_code", 500)
-            return jsonify({"error_in_service": "sentiment", "details": sentiment_result["error"]}), status_code
-
-        # Langkah 3: Panggil service Policy (input dari sentiment)
-        policy_result = call_service("policy", sentiment_result)
-        if "error" in policy_result:
-            status_code = policy_result.get("status_code", 500)
-            return jsonify({"error_in_service": "policy", "details": policy_result["error"]}), status_code
-        
-        # Langkah 4: Panggil service LDA (input dari policy)
-        lda_result = call_service("lda", policy_result)
-        if "error" in lda_result:
-            status_code = lda_result.get("status_code", 500)
-            return jsonify({"error_in_service": "lda", "details": lda_result["error"]}), status_code
-
-        # Langkah 5: Panggil service Summary (input dari lda)
-        summary_result = call_service("summary", lda_result)
-        if "error" in summary_result:
-            status_code = summary_result.get("status_code", 500)
-            return jsonify({"error_in_service": "summary", "details": summary_result["error"]}), status_code
-
-        # Hasil akhir adalah output dari service terakhir
-        return jsonify({
-            "status": "success",
-            "message": "File berhasil diproses oleh semua service.",
-            "final_result": lda_result
-        })
-
-    except Exception as e:
-        return jsonify({"error": f"Terjadi kesalahan internal di main_app: {str(e)}"}), 500
+    if 'user' in session:
+        user_room_id = session['user']
+        join_room(user_room_id)
+        print(f"Klien dengan SID {request.sid} secara eksplisit dimasukkan ke room: '{user_room_id}'")
+    else:
+        print(f"Klien anonim dengan SID {request.sid} mencoba join, tapi tidak ada sesi.")
 
 
+@socketio.on('disconnect')
+def handle_disconnect():
+    print(f"Klien terputus dengan SID: {request.sid}")
+
+# --- Menjalankan Aplikasi (DIUBAH) ---
 if __name__ == '__main__':
-    # Menjalankan server di port 5000 dan bisa diakses dari luar
-    app.config['SECRET_KEY'] = 'kunciii'
-
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Gunakan socketio.run() dan biarkan ia menggunakan eventlet secara otomatis.
+    # Menghapus 'allow_unsafe_werkzeug=True' karena tidak lagi diperlukan.
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True)

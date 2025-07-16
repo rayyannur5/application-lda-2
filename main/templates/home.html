@@ -10,6 +10,7 @@
     </header>
 
     <main>
+        <!-- Form Upload (Tidak Berubah) -->
         <div class="card shadow-sm mb-4">
             <div class="card-body p-4">
                 <h5 class="card-title mb-3">Unggah dan Proses Berkas</h5>
@@ -32,9 +33,10 @@
             </div>
         </div>
 
+        <!-- Kartu Log (Diubah untuk menampilkan stopwatch) -->
         <div id="log-card" class="card shadow-sm mb-4 d-none">
             <div class="card-header bg-light p-3">
-                <h5 class="mb-0">Log Proses</h5>
+                <h5 class="mb-0">Log Proses Real-time</h5>
             </div>
             <div class="card-body">
                 <div id="log-container" style="max-height: 250px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; background-color: #f8f9fa;">
@@ -54,6 +56,7 @@
             </div>
         </div>
 
+        <!-- Kartu Hasil (Tidak Berubah) -->
         <div id="result-card" class="card shadow-sm mb-4 d-none">
             <div class="card-header bg-light d-flex justify-content-between align-items-center p-3">
                 <h5 id="result-title" class="mb-0">Hasil Proses</h5>
@@ -62,17 +65,16 @@
                 <div id="result-content" class="table-responsive"></div>
             </div>
         </div>
-
+        
+        <!-- Kartu Gemini (Tidak Berubah) -->
         <div id="gemini-result-card" class="card shadow-sm d-none">
             <div class="card-header bg-light p-3">
                 <h5 class="mb-0 d-inline-flex align-items-center gap-2">
-                    <i class="bi bi-stars"></i>
-                    <span>Ringkasan dan Analisis</span>
+                    <i class="bi bi-stars"></i><span>Ringkasan dan Analisis</span>
                 </h5>
             </div>
             <div class="card-body p-4">
-                <div id="gemini-content">
-                    </div>
+                <div id="gemini-content"></div>
             </div>
         </div>
 
@@ -81,25 +83,34 @@
 {% endblock %}
 
 {% block script %}
+<!-- Pustaka Socket.IO dan Marked.js -->
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
 <script>
 $(document).ready(function() {
+    // --- Inisialisasi WebSocket ---
+    const socket = io();
+    
+    // --- PERUBAHAN UTAMA ---
+    // Setelah terhubung, kirim event 'join' ke server untuk masuk ke room.
+    socket.on('connect', () => {
+        console.log('Terhubung ke server WebSocket!');
+        socket.emit('ping_room');
+    });
 
-    // Cache selektor jQuery
+    // --- Cache Selektor jQuery ---
     const uploadForm = $('#upload-form'), btnProses = $('#btn-proses'), btnSpinner = $('#btn-proses-spinner');
     const btnIcon = $('#btn-proses-icon'), btnText = $('#btn-proses-text'), errorAlert = $('#error-alert');
-    
-    const logCard = $('#log-card'), logContainer = $('#log-container'), logList = $('#log-container ul');
-    const resultCard = $('#result-card'), resultTitle = $('#result-title'), resultContent = $('#result-content'), btnDownload = $('#btn-download');
-
+    const logCard = $('#log-card'), logList = $('#log-container ul');
+    const sampleCard = $('#sample-card'), sampleContent = $('#sample-content');
+    const resultCard = $('#result-card'), resultContent = $('#result-content');
     const geminiResultCard = $('#gemini-result-card'), geminiContent = $('#gemini-content');
 
-    const sampleCard = $('#sample-card'), sampleContent = $('#sample-content');
+    // --- Variabel State ---
+    let timers = {}; // Untuk menyimpan interval stopwatch setiap langkah
 
-    let processStartTime = null;
-    let lastLogTime = null;
-
+    // --- Fungsi UI ---
     function setButtonLoading(isLoading) {
         btnProses.prop('disabled', isLoading);
         btnSpinner.toggleClass('d-none', !isLoading);
@@ -107,51 +118,36 @@ $(document).ready(function() {
         btnText.text(isLoading ? 'Memproses...' : 'Proses Berkas');
     }
 
-    // Fungsi log disempurnakan dengan opsi level (info/error)
-    function addLogMessage(message, options = {}) {
-        const { isFinal = false, level = 'info' } = options;
-        const now = new Date();
-        const timestamp = now.toTimeString().split(' ')[0];
-        
-        let durationText = '';
-        if (lastLogTime) {
-            const duration = ((now - lastLogTime) / 1000).toFixed(2);
-            durationText = `<span class="text-muted ms-2">(${duration}s)</span>`;
-        }
-        
-        if (isFinal && processStartTime) {
-            const totalDuration = ((now - processStartTime) / 1000).toFixed(2);
-            durationText = `<span class="text-muted ms-2 fw-bold">(Total: ${totalDuration}s)</span>`;
-        }
-
-        lastLogTime = now;
-
-        // Tambahkan kelas CSS berdasarkan level log
-        let liClass = 'list-group-item bg-transparent border-0 py-1 px-0';
-        if (level === 'error') {
-            liClass += ' text-danger fw-bold';
-        }
-
-        const logEntry = `<li class="${liClass}">
-                              <span class="font-monospace">[${timestamp}]</span> ${message} ${durationText}
-                          </li>`;
-        logList.append(logEntry);
-        logContainer.scrollTop(logContainer[0].scrollHeight);
-    }
-    
     function resetUI() {
         errorAlert.addClass('d-none');
         logCard.addClass('d-none');
+        sampleCard.addClass('d-none');
         resultCard.addClass('d-none');
-        geminiResultCard.addClass('d-none'); // --- BARU: Sembunyikan kartu Gemini saat reset ---
-        sampleCard.addClass('d-none'); // --- BARU: Sembunyikan kartu Gemini saat reset ---
+        geminiResultCard.addClass('d-none');
         logList.html('');
+        sampleContent.html('');
         resultContent.html('');
-        geminiContent.html(''); // --- BARU: Kosongkan konten Gemini saat reset ---
-        sampleContent.html(''); // --- BARU: Kosongkan konten Gemini saat reset ---
-        btnDownload.addClass('d-one');
-        processStartTime = null;
-        lastLogTime = null;
+        geminiContent.html('');
+        Object.values(timers).forEach(clearInterval); // Hentikan semua timer
+        timers = {};
+    }
+
+    function startTimer(step) {
+        const startTime = Date.now();
+        const timerElement = $(`#timer-${step}`);
+        timers[step] = setInterval(() => {
+            const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(1);
+            timerElement.text(`(${elapsedTime}s)`);
+        }, 100);
+    }
+
+    function stopTimer(step, finalTime) {
+        if (timers[step]) {
+            clearInterval(timers[step]);
+            const timerElement = $(`#timer-${step}`);
+            const finalDuration = ((finalTime - timers[step].startTime) / 1000).toFixed(2);
+            timerElement.text(`(${finalDuration}s)`);
+        }
     }
 
     const linkify = (text) => {
@@ -159,10 +155,110 @@ $(document).ready(function() {
         return text.replace(urlRegex, url => `<a href="${url}" target="_blank">${url}</a>`);
     };
 
+    // --- Event Handler WebSocket ---
+    socket.on('step_start', function(data) {
+        const step = data.step;
+        const icon = '<i class="bi bi-hourglass-split text-primary me-2"></i>';
+        const logEntry = $(`<li id="log-step-${step}" class="list-group-item bg-transparent border-0 py-1 px-0 d-flex justify-content-between">
+                            <span>${icon}Memulai langkah: <strong>${step}</strong>...</span>
+                            <span id="timer-${step}" class="font-monospace text-muted"></span>
+                          </li>`);
+        logList.append(logEntry);
+        
+        const startTime = Date.now();
+        const timerElement = $(`#timer-${step}`);
+        timers[step] = setInterval(() => {
+            const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(1);
+            timerElement.text(`(${elapsedTime}s)`);
+        }, 100);
+    });
+
+    socket.on('step_end', function(data) {
+        const step = data.step;
+        if (timers[step]) {
+            clearInterval(timers[step]);
+        }
+        const logEntry = $(`#log-step-${step}`);
+        logEntry.find('i').removeClass('bi-hourglass-split text-primary').addClass('bi-check-circle-fill text-success');
+        logEntry.find('strong').after(' <span class="text-success">selesai.</span>');
+    });
+
+    socket.on('process_complete', function(data) {
+        setButtonLoading(false);
+        const icon = '<i class="bi bi-check-all text-success me-2"></i>';
+        logList.append(`<li class="list-group-item bg-transparent border-0 py-1 px-0 fw-bold">${icon}${data.message}</li>`);
+
+
+        if(data.df_hasil_head) {
+            const sampleData = JSON.parse(data.df_hasil_head)
+            
+            let tbody = ""
+            
+            for (const key in sampleData.full_text) {
+                const text = sampleData.full_text[key] || '';
+                const sentiment = sampleData.sentiment[key] || '';
+                const policy = sampleData.policy[key] || '';
+                const topic = sampleData.topic[key] !== undefined ? sampleData.topic[key] : '';
+                
+                // Menentukan kelas CSS berdasarkan sentimen
+                const sentimentClass = sentiment === 'positive' ? 'sentiment-positive' : 'sentiment-negative';
+                
+                tbody += `
+                    <tr>
+                        <td>${linkify(text)}</td>
+                        <td class="${sentimentClass}">${sentiment}</td>
+                        <td>${policy}</td>
+                        <td>${topic}</td>
+                    </tr>
+                `;
+            }
+
+
+            sampleContent.html(`
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Full Text</th>
+                            <th>Sentiment</th>
+                            <th>Kebijakan</th>
+                            <th>Topic</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    ${tbody}
+                    </tbody>
+                </table>
+            `)
+
+            sampleCard.removeClass('d-none');
+
+        }
+
+        if(data.html) {
+            resultCard.removeClass('d-none');
+            resultContent.html(data.html);
+        }
+
+        if(data.summary) {
+            geminiResultCard.removeClass('d-none');
+            geminiContent.html(marked.parse(data.summary));
+        }
+        
+    });
+
+    socket.on('process_error', function(data) {
+        setButtonLoading(false);
+        const icon = '<i class="bi bi-x-circle-fill text-danger me-2"></i>';
+        const errorMessage = `<strong>Error!</strong> ${data.error}`;
+        logList.append(`<li class="list-group-item bg-transparent border-0 py-1 px-0 text-danger fw-bold">${icon}${errorMessage}</li>`);
+        errorAlert.html(errorMessage).removeClass('d-none');
+    });
+
+    // --- Form Submission ---
     uploadForm.on('submit', function(event) {
         event.preventDefault();
-        const formData = new FormData(this);
-        if (!formData.get('file')?.size) {
+        const fileInput = $('#fileInput')[0];
+        if (!fileInput.files || fileInput.files.length === 0) {
             errorAlert.html('<strong>Gagal!</strong> Mohon pilih berkas CSV terlebih dahulu.').removeClass('d-none');
             return;
         }
@@ -170,29 +266,25 @@ $(document).ready(function() {
         resetUI();
         logCard.removeClass('d-none');
         setButtonLoading(true);
-        
-        processStartTime = new Date();
-        lastLogTime = null;
 
+        // Kirim file menggunakan AJAX seperti biasa
         $.ajax({
             url: '/process',
             method: 'POST',
-            data: formData,
+            data: new FormData(this),
             processData: false,
             contentType: false,
             success: (response) => {
-                console.log(response)
-                addLogMessage(response.message);
-                $('html, body').animate({ scrollTop: logCard.offset().top - 20 }, 500);
+                logList.append(`<li class="list-group-item bg-transparent border-0 py-1 px-0">${response.message}</li>`);
             },
             error: (jqXHR) => {
-                const errorMsg = jqXHR.responseJSON?.message || 'Gagal mengunggah file.';
+                const errorMsg = jqXHR.responseJSON?.error || 'Gagal memulai proses.';
                 errorAlert.html(`<strong>Error!</strong> ${errorMsg}`).removeClass('d-none');
                 setButtonLoading(false);
-                logCard.addClass('d-none');
             }
         });
     });
+
 });
 </script>
 {% endblock %}

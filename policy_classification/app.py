@@ -18,7 +18,7 @@ hf_logging.set_verbosity_error()
 
 app = Flask(__name__)
 
-MODEL_PATH = os.path.abspath("./policy_classification/model") 
+MODEL_PATH = os.path.abspath("./model") 
 
 if not os.path.isdir(MODEL_PATH):
     raise FileNotFoundError(f"Direktori model tidak ditemukan di: {MODEL_PATH}")
@@ -41,22 +41,25 @@ def classify_policy(text):
 @app.route('/classify_policy', methods=['POST'])
 def policy_endpoint():
 
-    request_data = request.get_json()
-    if not request_data or 'data' not in request_data:
-        return jsonify({"error": "Payload JSON tidak valid. Key 'data' tidak ditemukan."}), 400
+    try:
+        request_data = request.get_json()
+        if not request_data or 'data' not in request_data:
+            return jsonify({"error": "Payload JSON tidak valid. Key 'data' tidak ditemukan."}), 400
 
 
-    df = pd.DataFrame(request_data['data'])
+        df = pd.DataFrame(request_data['data'])
 
 
-    if 'clean_text' not in df.columns:
-        return jsonify({"error": "DataFrame harus memiliki kolom 'clean_text'."}), 400
+        if 'clean_text' not in df.columns:
+            return jsonify({"error": "DataFrame harus memiliki kolom 'clean_text'."}), 400
 
-    df['policy'] = df['clean_text'].apply(classify_policy)
+        df['policy'] = df['clean_text'].apply(classify_policy)
 
-    response_data = df.to_dict(orient='records')
+        response_data = df.to_dict(orient='records')
 
-    return jsonify({"data": response_data})
+        return jsonify({"data": response_data})
+    except Exception as e:
+        return jsonify({"error": f"Terjadi kesalahan internal di policy_classification: {str(e)}"}), 500
 
 if __name__ == '__main__':
     app.run(port=5003, debug=True)

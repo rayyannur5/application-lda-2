@@ -18,7 +18,7 @@ hf_logging.set_verbosity_error()
 
 app = Flask(__name__)
 
-MODEL_PATH = os.path.abspath("./sentiment_analysis/model") 
+MODEL_PATH = os.path.abspath("model") 
 
 if not os.path.isdir(MODEL_PATH):
     raise FileNotFoundError(f"Direktori model tidak ditemukan di: {MODEL_PATH}")
@@ -38,28 +38,41 @@ def classify_sentiment(text):
 
 @app.route('/analyze_sentiment', methods=['POST'])
 def sentiment_endpoint():
-
-    request_data = request.get_json()
-    if not request_data or 'data' not in request_data:
-        return jsonify({"error": "Payload JSON tidak valid. Key 'data' tidak ditemukan."}), 400
-
-
-    df = pd.DataFrame(request_data['data'])
+    try:
+        request_data = request.get_json()
+        if not request_data or 'data' not in request_data:
+            return jsonify({"error": "Payload JSON tidak valid. Key 'data' tidak ditemukan."}), 400
 
 
-    if 'clean_text' not in df.columns:
-        return jsonify({"error": "DataFrame harus memiliki kolom 'clean_text'."}), 400
+        df = pd.DataFrame(request_data['data'])
 
 
-    df['sentiment'] = df['clean_text'].apply(classify_sentiment)
-    plt.figure(figsize=(6, 4)); sns.countplot(x=df["sentiment"], palette=['#ff4f4f', '#0cad00', '#C0C0C0']); plt.savefig('storage/plot_sentiment.png'); plt.close()
-    plt.figure(figsize=(4, 4)); counts = df["sentiment"].value_counts(); colors = {'negative': '#ff4f4f', 'positive': '#0cad00', 'neutral': '#C0C0C0'}; plt.pie(counts, labels=counts.index, autopct="%1.1f%%", colors=[colors.get(label, '#C0C0C0') for label in counts.index], startangle=140); plt.savefig('storage/pie_sentiment.png'); plt.close()
-    
+        if 'clean_text' not in df.columns:
+            return jsonify({"error": "DataFrame harus memiliki kolom 'clean_text'."}), 400
 
-    response_data = df.to_dict(orient='records')
-    
 
-    return jsonify({"data": response_data})
+        df['sentiment'] = df['clean_text'].apply(classify_sentiment)
+        plt.figure(figsize=(6, 4)) # Sebaiknya pisahkan baris agar lebih mudah dibaca
+        sns.countplot(
+            x='sentiment',
+            data=df,
+            hue='sentiment', # Tambahkan ini
+            palette={'negative': '#ff4f4f', 'positive': '#0cad00', 'neutral': '#C0C0C0'}, # Gunakan dictionary agar lebih aman
+            legend=False     # Tambahkan ini
+        )
+        plt.savefig('../main/static/plot_sentiment.png'); plt.close()
+        plt.figure(figsize=(4, 4)); counts = df["sentiment"].value_counts(); colors = {'negative': '#ff4f4f', 'positive': '#0cad00', 'neutral': '#C0C0C0'}; 
+        plt.pie(counts, labels=counts.index, autopct="%1.1f%%", colors=[colors.get(label, '#C0C0C0') for label in counts.index], startangle=140); 
+        plt.savefig('../main/static/pie_sentiment.png'); plt.close()
+        
+
+        response_data = df.to_dict(orient='records')
+        
+
+        return jsonify({"data": response_data})
+
+    except Exception as e:
+        return jsonify({"error": f"Terjadi kesalahan internal di sentiment_analysis: {str(e)}"}), 500
 
 if __name__ == '__main__':
     # Menjalankan server di port 5002

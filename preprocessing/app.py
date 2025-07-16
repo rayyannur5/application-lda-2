@@ -59,29 +59,33 @@ def preprocess_endpoint():
     if not request_data or 'data' not in request_data:
         return jsonify({"error": "Payload JSON tidak valid. Key 'data' tidak ditemukan."}), 400
 
-    # 2. Konversi list of dictionaries menjadi DataFrame
-    df = pd.DataFrame(request_data['data'])
+    try:
+        # 2. Konversi list of dictionaries menjadi DataFrame
+        df = pd.DataFrame(request_data['data'])
 
-    # Pastikan kolom 'full_text' ada
-    if 'full_text' not in df.columns:
-        return jsonify({"error": "DataFrame harus memiliki kolom 'full_text'."}), 400
+        # Pastikan kolom 'full_text' ada
+        if 'full_text' not in df.columns:
+            return jsonify({"error": "DataFrame harus memiliki kolom 'full_text'."}), 400
 
-    # 3. Terapkan fungsi preprocessing ke setiap baris di kolom 'full_text'
-    #    dan simpan hasilnya di kolom baru 'cleaned_text'.
-    df['clean_text'] = df['full_text'].apply(cleaningText)
-    df['tokenize_text'] = df['clean_text'].apply(tokenizingText)
-    df['filter_text'] = df['tokenize_text'].apply(filteringText)
-    df['stem_text'] = df['filter_text'].apply(stemmingText)
-    df = df[df['clean_text'].str.strip() != '']
-    df.drop_duplicates(subset=['clean_text'], inplace=True)
-    
-    # 4. Konversi DataFrame yang sudah diperkaya kembali ke format JSON
-    #    untuk dikirim sebagai respons.
-    response_data = df.to_dict(orient='records')
-    
-    # 5. Kembalikan data yang sudah bersih.
-    #    Struktur payload { "data": [...] } dijaga agar konsisten.
-    return jsonify({"data": response_data})
+        # 3. Terapkan fungsi preprocessing ke setiap baris di kolom 'full_text'
+        #    dan simpan hasilnya di kolom baru 'cleaned_text'.
+        df['clean_text'] = df['full_text'].apply(cleaningText)
+        df['tokenize_text'] = df['clean_text'].apply(tokenizingText)
+        df['filter_text'] = df['tokenize_text'].apply(filteringText)
+        df['stem_text'] = df['filter_text'].apply(stemmingText)
+        df = df[df['stem_text'].str.strip() != '']
+        df.drop_duplicates()
+        
+        # 4. Konversi DataFrame yang sudah diperkaya kembali ke format JSON
+        #    untuk dikirim sebagai respons.
+        response_data = df.to_dict(orient='records')
+        
+        # 5. Kembalikan data yang sudah bersih.
+        #    Struktur payload { "data": [...] } dijaga agar konsisten.
+        return jsonify({"data": response_data})
+
+    except Exception as e:
+        return jsonify({"error": f"Terjadi kesalahan internal di service_preprocessing: {str(e)}"}), 500
 
 
 if __name__ == '__main__':

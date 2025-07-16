@@ -48,7 +48,6 @@ def generate_with_gemini(prompt):
             contents=contents,
             config=generate_content_config,
         ):
-            print(chunk.text, end="")
             responses += chunk.text
 
         return responses
@@ -64,22 +63,24 @@ def generate_with_gemini(prompt):
 @app.route('/generate_summary', methods=['POST'])
 def summary_endpoint():
 
-    request_data = request.get_json()
-    if not request_data or 'data' not in request_data:
-        return jsonify({"error": "Payload JSON tidak valid. Key 'data' tidak ditemukan."}), 400
+    try:
+
+        request_data = request.get_json()
+        if not request_data or 'data' not in request_data:
+            return jsonify({"error": "Payload JSON tidak valid. Key 'data' tidak ditemukan."}), 400
 
 
-    df = pd.DataFrame(request_data['data'])
+        df = pd.DataFrame(request_data['data'])
 
 
-    if 'clean_text' not in df.columns:
-        return jsonify({"error": "DataFrame harus memiliki kolom 'clean_text'."}), 400
-    
+        if 'clean_text' not in df.columns:
+            return jsonify({"error": "DataFrame harus memiliki kolom 'clean_text'."}), 400
+        
 
-    df_hasil_head = df.groupby(['sentiment', 'topic']).head(5).reset_index(drop=True).drop(['clean_text', 'tokenize_text', 'filter_text', 'stem_text'], axis=1).to_json()
+        df_hasil_head = df.groupby(['sentiment', 'topic']).head(5).reset_index(drop=True).drop(['clean_text', 'tokenize_text', 'filter_text', 'stem_text'], axis=1).to_json()
 
 
-    prompt = f"""
+        prompt = f"""
 Analisis Data Aspirasi Masyarakat Terkait Kebijakan Pemerintah Provinsi.
 **DATA YANG DISEDIAKAN:**
 
@@ -126,9 +127,12 @@ Berdasarkan semua data di atas, berikan analisis komprehensif dengan format beri
 Gunakan bahasa yang profesional, jelas, dan lugas.
 """
 
-    generated_analysis = generate_with_gemini(prompt)
+        generated_analysis = generate_with_gemini(prompt)
 
-    return jsonify({"data": generated_analysis})
+        return jsonify({"data": generated_analysis})
+    
+    except Exception as e:
+        return jsonify({"error": f"Terjadi kesalahan internal di summary: {str(e)}"}), 500
 
 if __name__ == '__main__':
     app.run(port=5005, debug=True)

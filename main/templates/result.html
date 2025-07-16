@@ -1,0 +1,54 @@
+<h5>Sentimen</h5>
+<hr>
+<div class="row">
+    <div class="col-4">
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Sentimen</th>
+                    <th>Jumlah</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for key, value in sentiment.items() %}
+                <tr>
+                    <td>{{ key }}</td>
+                    <td>{{ value }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="col-4">
+        <img style="max-width: 95%; max-height: 95%;" src="{{ url_for('static', filename='plot_sentiment.png') }}" alt="">
+    </div>
+    <div class="col-4">
+        <img style="max-width: 95%; max-height: 95%;" src="{{ url_for('static', filename='pie_sentiment.png') }}" alt="">
+    </div>
+</div>
+<h5>Pembagian Topik</h5>
+<hr>
+{{ lda | safe }}
+
+<h5>Klasifikasi Kebijakan</h5>
+<hr>
+<div class="row">
+    <div class="col-12">
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Kebijakan</th>
+                    <th>Jumlah</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for key, value in kebijakan.items() %}
+                <tr>
+                    <td>{{ key }}</td>
+                    <td>{{ value }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>

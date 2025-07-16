@@ -35,23 +35,27 @@ def lda(df):
 @app.route('/model_lda', methods=['POST'])
 def policy_endpoint():
 
-    request_data = request.get_json()
-    if not request_data or 'data' not in request_data:
-        return jsonify({"error": "Payload JSON tidak valid. Key 'data' tidak ditemukan."}), 400
+    try:
+
+        request_data = request.get_json()
+        if not request_data or 'data' not in request_data:
+            return jsonify({"error": "Payload JSON tidak valid. Key 'data' tidak ditemukan."}), 400
 
 
-    df = pd.DataFrame(request_data['data'])
+        df = pd.DataFrame(request_data['data'])
 
 
-    if 'stem_text' not in df.columns:
-        return jsonify({"error": "DataFrame harus memiliki kolom 'stem_text'."}), 400
+        if 'stem_text' not in df.columns:
+            return jsonify({"error": "DataFrame harus memiliki kolom 'stem_text'."}), 400
 
-    
-    html, df, lda_prompt = lda(df)
+        
+        html, df, lda_prompt = lda(df)
 
-    df_json = df.to_dict(orient='records')
+        df_json = df.to_dict(orient='records')
 
-    return jsonify({"data": {"html" : html, "df" : df_json, "lda_prompt": lda_prompt}})
+        return jsonify({"data": {"html" : html, "df" : df_json, "lda_prompt": lda_prompt}})
+    except Exception as e:
+        return jsonify({"error": f"Terjadi kesalahan internal di lda: {str(e)}"}), 500
 
 if __name__ == '__main__':
     app.run(port=5004, debug=True)
