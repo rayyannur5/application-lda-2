@@ -1,0 +1,198 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container py-4">
+    <header class="d-flex flex-wrap align-items-center justify-content-center justify-content-md-between pb-3 mb-4 border-bottom">
+        <div class="col-md-3 mb-2 mb-md-0"><a href="/" class="d-inline-flex link-body-emphasis text-decoration-none fw-bold fs-4">SINAWA</a></div>
+        <div class="col-md-3 text-end">
+            <a href="/logout" type="button" class="btn btn-outline-danger d-inline-flex align-items-center gap-2"><i class="bi bi-box-arrow-right"></i><span>Logout</span></a>
+        </div>
+    </header>
+
+    <main>
+        <div class="card shadow-sm mb-4">
+            <div class="card-body p-4">
+                <h5 class="card-title mb-3">Unggah dan Proses Berkas</h5>
+                <div id="error-alert" class="alert alert-danger d-none" role="alert"></div>
+                <form id="upload-form">
+                    <div class="row align-items-end g-3">
+                        <div class="col-md-8">
+                            <label for="fileInput" class="form-label">Pilih Berkas CSV</label>
+                            <input type="file" name="file" class="form-control" id="fileInput" accept=".csv" required>
+                        </div>
+                        <div class="col-md-4">
+                            <button id="btn-proses" type="submit" class="btn btn-primary w-100 d-inline-flex align-items-center justify-content-center gap-2">
+                                <span id="btn-proses-spinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                                <i id="btn-proses-icon" class="bi bi-gear-fill"></i>
+                                <span id="btn-proses-text">Proses Berkas</span>
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div id="log-card" class="card shadow-sm mb-4 d-none">
+            <div class="card-header bg-light p-3">
+                <h5 class="mb-0">Log Proses</h5>
+            </div>
+            <div class="card-body">
+                <div id="log-container" style="max-height: 250px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; background-color: #f8f9fa;">
+                    <ul class="list-group list-group-flush"></ul>
+                </div>
+            </div>
+        </div>
+
+        <div id="sample-card" class="card shadow-sm mb-4 d-none">
+            <div class="card-header bg-light d-flex justify-content-between align-items-center p-3">
+                <h5 id="sample-title" class="mb-0">Data Sample</h5>
+                <a id="btn-download" href="{{ url_for('static', filename='result.csv') }}" class="btn btn-success d-none align-items-center gap-2" download>
+                    <i class="bi bi-download"></i><span>Unduh Hasil</span></a>
+            </div>
+            <div class="card-body">
+                <div id="sample-content" class="table-responsive"></div>
+            </div>
+        </div>
+
+        <div id="result-card" class="card shadow-sm mb-4 d-none">
+            <div class="card-header bg-light d-flex justify-content-between align-items-center p-3">
+                <h5 id="result-title" class="mb-0">Hasil Proses</h5>
+            </div>
+            <div class="card-body">
+                <div id="result-content" class="table-responsive"></div>
+            </div>
+        </div>
+
+        <div id="gemini-result-card" class="card shadow-sm d-none">
+            <div class="card-header bg-light p-3">
+                <h5 class="mb-0 d-inline-flex align-items-center gap-2">
+                    <i class="bi bi-stars"></i>
+                    <span>Ringkasan dan Analisis</span>
+                </h5>
+            </div>
+            <div class="card-body p-4">
+                <div id="gemini-content">
+                    </div>
+            </div>
+        </div>
+
+    </main>
+</div>
+{% endblock %}
+
+{% block script %}
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+<script>
+$(document).ready(function() {
+
+    // Cache selektor jQuery
+    const uploadForm = $('#upload-form'), btnProses = $('#btn-proses'), btnSpinner = $('#btn-proses-spinner');
+    const btnIcon = $('#btn-proses-icon'), btnText = $('#btn-proses-text'), errorAlert = $('#error-alert');
+    
+    const logCard = $('#log-card'), logContainer = $('#log-container'), logList = $('#log-container ul');
+    const resultCard = $('#result-card'), resultTitle = $('#result-title'), resultContent = $('#result-content'), btnDownload = $('#btn-download');
+
+    const geminiResultCard = $('#gemini-result-card'), geminiContent = $('#gemini-content');
+
+    const sampleCard = $('#sample-card'), sampleContent = $('#sample-content');
+
+    let processStartTime = null;
+    let lastLogTime = null;
+
+    function setButtonLoading(isLoading) {
+        btnProses.prop('disabled', isLoading);
+        btnSpinner.toggleClass('d-none', !isLoading);
+        btnIcon.toggleClass('d-none', isLoading);
+        btnText.text(isLoading ? 'Memproses...' : 'Proses Berkas');
+    }
+
+    // Fungsi log disempurnakan dengan opsi level (info/error)
+    function addLogMessage(message, options = {}) {
+        const { isFinal = false, level = 'info' } = options;
+        const now = new Date();
+        const timestamp = now.toTimeString().split(' ')[0];
+        
+        let durationText = '';
+        if (lastLogTime) {
+            const duration = ((now - lastLogTime) / 1000).toFixed(2);
+            durationText = `<span class="text-muted ms-2">(${duration}s)</span>`;
+        }
+        
+        if (isFinal && processStartTime) {
+            const totalDuration = ((now - processStartTime) / 1000).toFixed(2);
+            durationText = `<span class="text-muted ms-2 fw-bold">(Total: ${totalDuration}s)</span>`;
+        }
+
+        lastLogTime = now;
+
+        // Tambahkan kelas CSS berdasarkan level log
+        let liClass = 'list-group-item bg-transparent border-0 py-1 px-0';
+        if (level === 'error') {
+            liClass += ' text-danger fw-bold';
+        }
+
+        const logEntry = `<li class="${liClass}">
+                              <span class="font-monospace">[${timestamp}]</span> ${message} ${durationText}
+                          </li>`;
+        logList.append(logEntry);
+        logContainer.scrollTop(logContainer[0].scrollHeight);
+    }
+    
+    function resetUI() {
+        errorAlert.addClass('d-none');
+        logCard.addClass('d-none');
+        resultCard.addClass('d-none');
+        geminiResultCard.addClass('d-none'); // --- BARU: Sembunyikan kartu Gemini saat reset ---
+        sampleCard.addClass('d-none'); // --- BARU: Sembunyikan kartu Gemini saat reset ---
+        logList.html('');
+        resultContent.html('');
+        geminiContent.html(''); // --- BARU: Kosongkan konten Gemini saat reset ---
+        sampleContent.html(''); // --- BARU: Kosongkan konten Gemini saat reset ---
+        btnDownload.addClass('d-one');
+        processStartTime = null;
+        lastLogTime = null;
+    }
+
+    const linkify = (text) => {
+        const urlRegex = /(https?:\/\/[^\s]+)/g;
+        return text.replace(urlRegex, url => `<a href="${url}" target="_blank">${url}</a>`);
+    };
+
+    uploadForm.on('submit', function(event) {
+        event.preventDefault();
+        const formData = new FormData(this);
+        if (!formData.get('file')?.size) {
+            errorAlert.html('<strong>Gagal!</strong> Mohon pilih berkas CSV terlebih dahulu.').removeClass('d-none');
+            return;
+        }
+
+        resetUI();
+        logCard.removeClass('d-none');
+        setButtonLoading(true);
+        
+        processStartTime = new Date();
+        lastLogTime = null;
+
+        $.ajax({
+            url: '/process',
+            method: 'POST',
+            data: formData,
+            processData: false,
+            contentType: false,
+            success: (response) => {
+                console.log(response)
+                addLogMessage(response.message);
+                $('html, body').animate({ scrollTop: logCard.offset().top - 20 }, 500);
+            },
+            error: (jqXHR) => {
+                const errorMsg = jqXHR.responseJSON?.message || 'Gagal mengunggah file.';
+                errorAlert.html(`<strong>Error!</strong> ${errorMsg}`).removeClass('d-none');
+                setButtonLoading(false);
+                logCard.addClass('d-none');
+            }
+        });
+    });
+});
+</script>
+{% endblock %}
